@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { collection, query, where, onSnapshot, doc, setDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, setDoc, addDoc, updateDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Send, User, MessageCircle } from 'lucide-react';
+import { Send, User, MessageCircle, Check, CheckCheck } from 'lucide-react';
 
 export default function Messages({ user }) {
   const location = useLocation();
@@ -49,6 +49,25 @@ export default function Messages({ user }) {
     return unsubscribe;
   }, [activeChat]);
 
+  // Mark chat as read when opening or receiving messages in active chat
+  useEffect(() => {
+    if (!activeChat || chats.length === 0) return;
+    
+    const currentChat = chats.find(c => c.id === activeChat.id);
+    if (currentChat && currentChat.hasUnread?.[user.uid]) {
+      updateDoc(doc(db, 'chats', activeChat.id), {
+        [`hasUnread.${user.uid}`]: false
+      }).catch(console.error);
+    }
+
+    // Mark unread messages sent by the other user as seen
+    messages.forEach(m => {
+      if (m.senderId !== user.uid && !m.isSeen) {
+        updateDoc(doc(db, `chats/${activeChat.id}/messages`, m.id), { isSeen: true }).catch(console.error);
+      }
+    });
+  }, [activeChat, chats, messages, user.uid]);
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!text.trim() || !activeChat) return;
@@ -68,6 +87,11 @@ export default function Messages({ user }) {
         [activeChat.otherUser.uid]: { email: activeChat.otherUser.email || '', username: otherName },
       },
       lastMessage: msgText,
+      lastMessageSenderId: user.uid,
+      hasUnread: {
+        [user.uid]: false,
+        [activeChat.otherUser.uid]: true
+      },
       updatedAt: serverTimestamp()
     }, { merge: true });
 
@@ -75,6 +99,7 @@ export default function Messages({ user }) {
     await addDoc(collection(db, `chats/${activeChat.id}/messages`), {
       text: msgText,
       senderId: user.uid,
+      isSeen: false,
       createdAt: serverTimestamp()
     });
   };
@@ -102,17 +127,23 @@ export default function Messages({ user }) {
             chats.map(chat => {
               const otherUser = getOtherUser(chat);
               const isActive = activeChat?.id === chat.id;
+              const hasUnread = chat.hasUnread?.[user.uid];
               return (
                 <button 
                   key={chat.id} 
                   onClick={() => setActiveChat({ id: chat.id, otherUser })}
-                  className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50 transition-colors flex items-center space-x-3 ${isActive ? 'bg-brand-50 border-l-4 border-l-brand-500' : 'border-l-4 border-l-transparent'}`}
+                  className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50 transition-colors flex items-center space-x-3 relative ${isActive ? 'bg-brand-50 border-l-4 border-l-brand-500' : 'border-l-4 border-l-transparent'}`}
                 >
                   <div className="bg-gray-200 p-2 rounded-full hidden sm:block"><User size={20} className="text-gray-500" /></div>
                   <div className="flex-1 overflow-hidden">
-                    <h3 className="font-semibold text-gray-800 truncate">{otherUser.username}</h3>
-                    <p className="text-sm text-gray-500 truncate">{chat.lastMessage}</p>
+                    <h3 className={`font-semibold truncate ${hasUnread ? 'text-black' : 'text-gray-800'}`}>
+                      {otherUser.username}
+                    </h3>
+                    <p className={`text-sm truncate ${hasUnread ? 'text-brand-600 font-medium' : 'text-gray-500'}`}>
+                      {chat.lastMessage}
+                    </p>
                   </div>
+                  {hasUnread && <div className="absolute right-4 top-1/2 transform -translate-y-1/2 w-3 h-3 bg-red-500 rounded-full animate-pulse" />}
                 </button>
               )
             })
@@ -139,8 +170,13 @@ export default function Messages({ user }) {
                 const isMe = m.senderId === user.uid;
                 return (
                   <div key={m.id} className={`flex ${isMe ? 'items-end justify-end' : 'items-start justify-start'}`}>
-                    <div className={`max-w-[70%] px-4 py-2 rounded-2xl ${isMe ? 'bg-brand-500 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'}`}>
-                      {m.text}
+                    <div className={`max-w-[70%] px-4 py-2 flex flex-col rounded-2xl ${isMe ? 'bg-brand-500 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'}`}>
+                      <span className="break-words">{m.text}</span>
+                      {isMe && (
+                        <div className="flex justify-end mt-1 opacity-80">
+                          {m.isSeen ? <CheckCheck size={14} className="text-blue-200" /> : <Check size={14} className="text-gray-200" />}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
